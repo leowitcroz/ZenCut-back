@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE `tenant` ADD COLUMN `corPrimaria` VARCHAR(7) NOT NULL DEFAULT '#0D1B2A',
+    ADD COLUMN `corSecundaria` VARCHAR(7) NOT NULL DEFAULT '#0D6EFD',
+    ADD COLUMN `loginDescricao` VARCHAR(255) NULL,
+    ADD COLUMN `loginTitulo` VARCHAR(120) NULL;

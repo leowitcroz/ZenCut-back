@@ -1,0 +1,475 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. GERENCIAMENTO DO SAAS (MULTI-TENANT) E PLANOS
+// ==========================================
+
+model Tenant {
+  id                 String   @id @default(uuid())
+  subdomain          String   @unique // ex: 'mercado', 'oficina'
+  nomeNegocio        String   @db.VarChar(255)
+  documento          String?  @db.VarChar(50) // CNPJ ou CPF do seu cliente
+  whatsapp           String?  @db.VarChar(20) // Usado no botão "Renovar Plano" (redireciona pro wa.me)
+  ativo              Boolean  @default(true)
+
+  // Personalização da tela de login (subdomínio da própria loja)
+  corPrimaria        String   @default("#0D1B2A") @db.VarChar(7)
+  corSecundaria      String   @default("#0D6EFD") @db.VarChar(7)
+  loginTitulo        String?  @db.VarChar(120)
+  loginDescricao     String?  @db.VarChar(255)
+
+  // Landing page pública da loja (subdomínio raiz — vitrine pros clientes antes de logar)
+  bannerUrl          String?  @db.VarChar(500)
+  descricaoLoja      String?  @db.Text
+  endereco           String?  @db.VarChar(255)
+  instagram          String?  @db.VarChar(100)
+
+  // Controle de Módulos do seu SaaS (Seu faturamento)
+  planoSaaS          PlanoSaaS @default(BASICO)
+  moduloFinanceiro   Boolean   @default(false)
+  moduloAssinaturas  Boolean   @default(false)
+  moduloPagamentoWeb Boolean   @default(false)
+  
+  // 👉 OS 3 NOVOS MÓDULOS ENTRARAM AQUI:
+  moduloAgendamento  Boolean   @default(true)  // Começa true pois é o core do sistema
+  moduloVendas       Boolean   @default(false) // Permite usar comandas de itens
+  moduloProdutos     Boolean   @default(false) // Permite gerenciar o estoque
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relações Reversas (Tudo que pertence a esse Tenant)
+  planos           PlanoAssinatura[] // Planos que o Tenant criou para os clientes dele
+  funcionarios     Funcionario[]
+  clientes         Cliente[]
+  produtos         Produto[]
+  servicos         Servico[]
+  agendamentos     Agendamento[]
+  itensVenda       ItemVenda[]
+  despesas         Despesa[]
+  despesasRecor    DespesaRecorrente[]
+  assinaturas      AssinaturaCliente[]
+  avaliacoes       Avaliacao[]
+  indicacoes       Indicacao[]
+  faturasSaaS      FaturaSaaS[]
+  auditorias       Auditoria[]
+  disponibilidades Disponibilidade[]
+  entradas Entrada[]
+  regraComissao RegraComissao?
+}
+
+// Regras de comissão que a própria loja configura pros funcionários dela.
+// Uma configuração por loja (aplica pra todos os funcionários igual).
+model RegraComissao {
+  id                   Int      @id @default(autoincrement())
+  percentualProduto    Decimal  @default(0) @db.Decimal(5, 2) // % sobre venda de produtos
+  percentualConsumivel Decimal  @default(0) @db.Decimal(5, 2) // % sobre venda de bebidas/consumíveis
+  percentualAvulso     Decimal  @default(0) @db.Decimal(5, 2) // % sobre serviço cobrado fora do plano
+  valorFixoPlano       Decimal  @default(0) @db.Decimal(10, 2) // R$ fixo por serviço coberto por um plano
+  updatedAt            DateTime @updatedAt
+
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+
+
+model Entrada {
+  id          String   @id @default(uuid())
+  description String
+  amount      Decimal  @db.Decimal(10, 2)
+  date        DateTime
+  isPaid      Boolean  @default(true) // Verdadeiro se o dinheiro já caiu na conta
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([date])
+  @@index([tenantId])
+}
+
+enum PlanoSaaS {
+  BASICO               // Financeiro
+  INTERMEDIARIO_VENDAS // Financeiro + Produtos/Estoque + Vendas
+  INTERMEDIARIO_AGENDA // Financeiro + Agendamento
+  PRO                  // Acesso total (Financeiro + Agendamento + Produtos + Vendas)
+  ENTERPRISE           // Legado: tratado igual ao PRO
+}
+
+// Preço e nome de exibição de cada plano — o ADM edita isso pela tela, sem precisar mexer em código
+model PlanoPreco {
+  plano       PlanoSaaS @id
+  nome        String    @db.VarChar(100)
+  valorMensal Decimal   @db.Decimal(10, 2)
+  updatedAt   DateTime  @updatedAt
+}
+
+// Tabela onde o Tenant cria as próprias regras (Ex: "Plano Lava-Rápido Mensal", "Clube da Barba")
+model PlanoAssinatura {
+  id             Int     @id @default(autoincrement())
+  nome           String  @db.VarChar(255)
+  valorMensal    Decimal @db.Decimal(10, 2)
+  qtdCreditos    Int     @default(0) // Quantos serviços o cliente pode agendar? (ignorado se ilimitado=true)
+  ilimitado      Boolean @default(false) // Se true, o cliente usa os serviços inclusos à vontade, sem descontar crédito
+  diasPermitidos Json?   // Array de ints 0-6 (0=domingo). null = vale todos os dias
+  ativo          Boolean @default(true)
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relacionamentos Reversos
+  assinaturas AssinaturaCliente[]
+  servicos    Servico[]
+}
+
+
+model FaturaSaaS {
+  id             String   @id @default(uuid())
+  valor          Decimal  @db.Decimal(10, 2)
+  status         String   @default("PENDENTE") // Ex: PENDENTE, PAGO, ATRASADO
+  dataInicio     DateTime @default(now())
+  dataVencimento DateTime
+  dataPagamento  DateTime?
+
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+// ==========================================
+// 2. PESSOAS E USUÁRIOS
+// ==========================================
+
+model Funcionario {
+  id              Int     @id @default(autoincrement())
+  nome            String  @db.VarChar(255)
+  email           String  @db.VarChar(255)
+  password        String  @db.VarChar(255)
+  role            Int     @default(2) // 1: Admin, 2: Funcionario Padrão
+  ativo           Boolean @default(true)
+  fotoUrl         String? @db.VarChar(500)
+  descricao       String? @db.Text // Bio curta exibida na vitrine pública (landing page da loja)
+  // Dono da PLATAFORMA ZenCut (não confundir com role=1, que é só o dono/admin da própria loja).
+  // Só quem tem isso true pode ver dados globais de todos os tenants (rotas /adm/*).
+  isPlatformOwner Boolean @default(false)
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  assinaturas  AssinaturaCliente[]
+  horarios     Disponibilidade[]
+  agendamentos Agendamento[]
+  avaliacoes   Avaliacao[]
+  vendasFeitas ItemVenda[]         @relation("FuncionarioVendedor")
+
+  @@unique([email, tenantId]) // Permite o mesmo email em tenants diferentes
+}
+
+model Cliente {
+  id        Int      @id @default(autoincrement())
+  nome      String   @db.VarChar(255)
+  email     String?  @db.VarChar(255)
+  senha     String?  @default("") @db.VarChar(255)
+  telefone  String?  @db.VarChar(20)
+  role      Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  assinatura   AssinaturaCliente?
+  agendamentos Agendamento[]
+  indicacoes   Indicacao[]
+  avaliacoes   Avaliacao[]
+  compras      ItemVenda[]        @relation("ClienteComprador")
+
+  @@unique([email, tenantId])
+}
+
+// ==========================================
+// 3. CATÁLOGO E VENDAS
+// ==========================================
+
+model Servico {
+  id        Int     @id @default(autoincrement())
+  nome      String  @db.VarChar(255)
+  valor     Float   @default(0)
+  fotoUrl   String? @db.VarChar(500) // Exibida no card do serviço na vitrine pública
+  descricao String? @db.Text
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Lista de Planos do Tenant onde este serviço sai "de graça" (abate crédito)
+  planosInclusos PlanoAssinatura[]
+}
+
+model Produto {
+  id      Int         @id @default(autoincrement())
+  nome    String      @db.VarChar(255)
+  valor   Decimal     @db.Decimal(10, 2)
+  estoque Int         @default(0)
+  tipo    TipoProduto @default(PRODUTO)
+  caracteristicas Json?
+  despesas        Despesa[]
+  itensVenda       ItemVenda[]
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // @@unique([nome, tenantId])
+}
+
+enum TipoProduto {
+  PRODUTO
+  CONSUMIVEL
+}
+
+model ItemVenda {
+  id            Int         @id @default(autoincrement())
+  nomeItem      String      @db.VarChar(255)
+  quantidade    Int         @default(1)
+  valorUnitario Decimal     @db.Decimal(10, 2)
+  dataVenda     DateTime    @default(now())
+  tipoOrigem    TipoProduto
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clienteId Int?
+  cliente   Cliente? @relation("ClienteComprador", fields: [clienteId], references: [id])
+
+  funcionarioId Int
+  funcionario   Funcionario @relation("FuncionarioVendedor", fields: [funcionarioId], references: [id])
+
+  agendamentoId Int?
+  agendamento   Agendamento? @relation(fields: [agendamentoId], references: [id])
+
+  produtoId Int?
+  produto   Produto? @relation(fields: [produtoId], references: [id])
+
+  @@index([clienteId])
+  @@index([funcionarioId])
+  @@index([tenantId])
+}
+
+// ==========================================
+// 4. AGENDAMENTOS E ASSINATURAS (CORE)
+// ==========================================
+
+model Disponibilidade {
+  id         Int      @id @default(autoincrement())
+  data       DateTime
+  horaInicio String   @db.VarChar(5)
+  horaFim    String   @db.VarChar(5)
+  disponivel Boolean  @default(true)
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  funcionarioId Int
+  funcionario   Funcionario @relation(fields: [funcionarioId], references: [id])
+
+  agendamentos Agendamento[]
+
+  @@unique([funcionarioId, data, horaInicio])
+}
+
+model Agendamento {
+  id             Int             @id @default(autoincrement())
+  nomeCliente    String?         @default("")
+  servico        String          @db.VarChar(255)
+  valor          Float           @default(0)
+  valorServico   Float           @default(0)
+  tipo           String          @db.VarChar(255)
+  status         String          @default("agendado")
+  formaPagamento FormaPagamento?
+  cupom          Boolean         @default(false)
+  avaliado       Boolean         @default(false)
+  observacoes    String?         @db.Text
+  pago           Boolean?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  creditosGastos Int             @default(0)
+  planoAplicado  String?         @db.VarChar(255) // Nome do plano no momento do agendamento (se algum serviço foi coberto)
+  qtdServicosPlano Int           @default(0) // Quantos serviços saíram pelo plano (credito OU ilimitado) — usado no cálculo de comissão
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clienteId Int?
+  cliente   Cliente? @relation(fields: [clienteId], references: [id])
+
+  funcionarioId Int
+  funcionario   Funcionario @relation(fields: [funcionarioId], references: [id])
+
+  horarioId Int
+  horario   Disponibilidade @relation(fields: [horarioId], references: [id])
+
+  avaliacao  Avaliacao?
+  itensVenda ItemVenda[]
+}
+
+model AssinaturaCliente {
+  id Int @id @default(autoincrement())
+
+  // Vínculo com a nova tabela de planos customizados
+  planoId Int
+  plano   PlanoAssinatura @relation(fields: [planoId], references: [id])
+
+  limiteCreditos Int     @default(0) // Foto do limite no momento da assinatura
+  creditosUsados Int     @default(0)
+  ilimitado      Boolean @default(false) // Foto de plano.ilimitado no momento da assinatura
+
+  dataInicio          DateTime
+  dataFim             DateTime
+  isAnual             Boolean  @default(false)
+  ativo               Boolean  @default(true)
+  status              String   @default("Ativo")
+  formaPagamento      String   @default("")
+  renovacaoAutomatica Boolean  @default(true)
+
+  mesesDePlano Int @default(1)
+  anosDePlano  Int @default(1)
+  parcelas     Int @default(1)
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clienteId Int     @unique
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+
+  funcionarioId Int?
+  funcionario   Funcionario? @relation(fields: [funcionarioId], references: [id])
+
+  historicoRenovacao HistoricoRenovacao[]
+}
+
+// ==========================================
+// 5. FINANCEIRO E OUTROS
+// ==========================================
+
+model Despesa {
+  id          String      @id @default(uuid())
+  description String
+  amount      Decimal     @db.Decimal(10, 2)
+  date        DateTime
+  type        ExpenseType
+  isPaid      Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  produtoId     Int?
+  produto       Produto? @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([date])
+  @@index([tenantId])
+}
+
+model DespesaRecorrente {
+  id          String   @id @default(uuid())
+  description String
+  amount      Decimal  @db.Decimal(10, 2)
+  dayOfMonth  Int
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Indicacao {
+  id            Int      @id @default(autoincrement())
+  emailIndicado String   @db.VarChar(255)
+  data          DateTime @default(now())
+  convertido    Boolean  @default(false)
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clienteId Int
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+}
+
+model Avaliacao {
+  id         Int      @id @default(autoincrement())
+  nota       Int
+  comentario String?  @db.VarChar(500)
+  data       DateTime @default(now())
+  resposta   String?  @db.VarChar(500)
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  agendamentoId Int         @unique
+  agendamento   Agendamento @relation(fields: [agendamentoId], references: [id])
+
+  clienteId Int
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+
+  funcionarioId Int
+  funcionario   Funcionario @relation(fields: [funcionarioId], references: [id])
+
+  @@index([funcionarioId])
+  @@index([clienteId])
+}
+
+model HistoricoRenovacao {
+  id            Int      @id @default(autoincrement())
+  dataRenovacao DateTime
+  valor         Float
+  tipoPlano     String
+  createdAt     DateTime @default(now())
+
+  assinaturaId Int
+  assinatura   AssinaturaCliente @relation(fields: [assinaturaId], references: [id])
+}
+
+model Auditoria {
+  id             Int      @id @default(autoincrement())
+  tabela_afetada String   @db.VarChar(100)
+  item_id        Int
+  item_nome      String?  @db.VarChar(255)
+  estoque_antigo Int?
+  estoque_novo   Int?
+  quem_fez_id    String?  @db.VarChar(100)
+  quando_mudou   DateTime @default(now())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// Enums
+enum ExpenseType {
+  FIXED
+  VARIABLE
+}
+
+enum FormaPagamento {
+  CARTAO
+  PIX
+  DINHEIRO
+  PLANO
+}
