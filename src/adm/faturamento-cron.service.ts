@@ -27,7 +27,7 @@ export class FaturamentoCronService {
     const hoje = new Date();
 
     const tenantsAtivos = await this.prisma.tenant.findMany({
-      where: { ativo: true },
+      where: { ativo: true, funcionarios: { none: { isPlatformOwner: true } } },
       include: { faturasSaaS: { orderBy: { createdAt: 'desc' }, take: 1 } }
     });
 
@@ -61,8 +61,11 @@ export class FaturamentoCronService {
     const seteDiasAtras = new Date(hoje);
     seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
 
+    // A loja do próprio dono da plataforma (isPlatformOwner) não é uma cliente
+    // pagante de verdade — sem essa exclusão, esse cron podia bloquear o
+    // próprio admin do acesso ao painel administrativo (já aconteceu).
     const tenantsAtivos = await this.prisma.tenant.findMany({
-      where: { ativo: true },
+      where: { ativo: true, funcionarios: { none: { isPlatformOwner: true } } },
       include: { faturasSaaS: { orderBy: { createdAt: 'desc' }, take: 1 } }
     });
 
