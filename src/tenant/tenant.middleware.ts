@@ -13,24 +13,34 @@ export class TenantMiddleware implements NestMiddleware {
       return next();
     }
 
-    // 2. Lista inteligente de rotas que NÃO precisam de Tenant ID
+    // 2. Lista de rotas que NÃO precisam de Tenant ID de jeito nenhum (o token,
+    // quando existe, já carrega o próprio tenantId — não dependem do header).
     const rotasPublicas = [
       '/tenant/info',
       '/tenants/info',
       '/tenants/registrar-loja',
-      '/auth/'
+      '/auth/check-token',
+      '/auth/is-valid',
     ];
-
-    // Verifica se a rota atual está na nossa lista de liberação
     const isPublicRoute = rotasPublicas.some(rota => req.originalUrl.includes(rota));
     if (isPublicRoute) {
       return next();
     }
 
+    // 2.1 Login/registro: o tenant é OPCIONAL no header (permite o dono logar
+    // pelo domínio principal sem saber o subdomínio da própria loja — o
+    // AuthService acha a conta pelo e-mail nesse caso). MAS, se o front mandar
+    // o header (login feito de dentro do subdomínio de uma loja específica),
+    // ele PRECISA ser resolvido e usado pra restringir a busca àquele tenant —
+    // sem isso, duas lojas com a mesma combinação de e-mail (uma como cliente,
+    // outra como funcionário) faziam o login de uma vazar pra conta da outra.
+    const tenantOpcional = ['/auth/login', '/auth/register'].some(rota => req.originalUrl.includes(rota));
+
     // 3. Pega o ID que o frontend (Vue) envia no header para as rotas protegidas
     const tenantId = req.headers['x-tenant-id'] as string;
 
     if (!tenantId) {
+      if (tenantOpcional) return next();
       throw new UnauthorizedException('Identificação do negócio (Tenant) não fornecida no cabeçalho.');
     }
 
@@ -41,6 +51,7 @@ export class TenantMiddleware implements NestMiddleware {
 
     // 5. Valida se o cliente existe e se não está com a conta bloqueada/inativa
     if (!tenant || !tenant.ativo) {
+      if (tenantOpcional) return next(); // trata como se o header não tivesse vindo
       throw new NotFoundException('Negócio não encontrado ou inativo.');
     }
 
