@@ -145,8 +145,12 @@ export class AuthService {
         }
     }
 
-    // Validação da coluna 'password' do seu banco
-    if (!user || !user.password) {
+    // Funcionario guarda o hash em 'password'; Cliente guarda em 'senha' —
+    // sem essa distinção, TODO login de cliente falhava aqui (user.password
+    // sempre undefined pra um Cliente, mesmo com a senha certa).
+    const senhaHash = tipoUsuario === 'FUNCIONARIO' ? user?.password : user?.senha;
+
+    if (!user || !senhaHash) {
         throw new UnauthorizedException('Email e/ou senha incorretos.');
     }
 
@@ -154,7 +158,7 @@ export class AuthService {
         throw new UnauthorizedException('Sua conta de funcionário está desativada.');
     }
 
-    const senhaCorreta = await bcrypt.compare(senhaDigitada, user.password);
+    const senhaCorreta = await bcrypt.compare(senhaDigitada, senhaHash);
     if (!senhaCorreta) {
         throw new UnauthorizedException('Email e/ou senha incorretos.');
     }
