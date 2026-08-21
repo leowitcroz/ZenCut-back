@@ -70,8 +70,13 @@ export class FinanceiroController {
     ) {
         this.validarAdmin(usuario);
         if (!inicio || !fim) throw new BadRequestException('Datas de início e fim são obrigatórias');
+        const dataInicio = new Date(inicio);
+        const dataFim = new Date(fim);
+        if (isNaN(dataInicio.getTime()) || isNaN(dataFim.getTime())) {
+            throw new BadRequestException('Datas de início e fim inválidas');
+        }
 
-        return this.financeiroService.obterRelatorioEquipe(tenantId, new Date(inicio), new Date(fim));
+        return this.financeiroService.obterRelatorioEquipe(tenantId, dataInicio, dataFim);
     }
 
     // =========================================================================
@@ -92,9 +97,14 @@ export class FinanceiroController {
             throw new ForbiddenException('Apenas funcionários têm relatório individual.');
         }
         if (!inicio || !fim) throw new BadRequestException('Datas de início e fim são obrigatórias');
+        const dataInicio = new Date(inicio);
+        const dataFim = new Date(fim);
+        if (isNaN(dataInicio.getTime()) || isNaN(dataFim.getTime())) {
+            throw new BadRequestException('Datas de início e fim inválidas');
+        }
 
         const relatorio = await this.financeiroService.obterRelatorioEquipe(
-            tenantId, new Date(inicio), new Date(fim), usuario.id
+            tenantId, dataInicio, dataFim, usuario.id
         );
 
         return relatorio[0] || {
