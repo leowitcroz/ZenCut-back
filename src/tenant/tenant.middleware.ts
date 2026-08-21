@@ -49,9 +49,23 @@ export class TenantMiddleware implements NestMiddleware {
       where: { id: tenantId },
     });
 
-    // 5. Valida se o cliente existe e se não está com a conta bloqueada/inativa
-    if (!tenant || !tenant.ativo) {
-      if (tenantOpcional) return next(); // trata como se o header não tivesse vindo
+    // 5. O tenant não existe de verdade (ID inválido/inexistente) — aí sim não
+    // há nada pra restringir, trata como se o header não tivesse vindo.
+    if (!tenant) {
+      if (tenantOpcional) return next();
+      throw new NotFoundException('Negócio não encontrado.');
+    }
+
+    // 5.1 O tenant existe mas está inativo (loja bloqueada por pagamento
+    // pendente, por exemplo). Isso NÃO pode cair no mesmo tratamento de "sem
+    // tenant": um e-mail pode existir em várias lojas ao mesmo tempo (é o
+    // comportamento esperado — cada loja é independente), então tratar o
+    // header como ausente jogava o login de uma loja inativa pro fallback de
+    // busca por e-mail SEM restrição de loja nenhuma — o login podia acabar
+    // caindo na conta de OUTRO tenant que por acaso tem o mesmo e-mail. Segue
+    // restringindo a busca a este tenant específico; quem decide se dá pra
+    // logar numa loja inativa é a regra de negócio do login, não o middleware.
+    if (!tenant.ativo && !tenantOpcional) {
       throw new NotFoundException('Negócio não encontrado ou inativo.');
     }
 

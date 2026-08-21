@@ -109,40 +109,53 @@ export class AuthService {
     // 3. LOGIN (Multiuso: Funciona para Donos, Barbeiros, Recepcionistas e Clientes)
     // =========================================================================
     async login(tenantId: string | undefined, email: string, senhaDigitada: string) {
-    // 1. Busca o FUNCIONÁRIO trazendo a relação com o Tenant junto
-    let user: any = await this.prisma.funcionario.findFirst({
-        where: {
-            email: email,
-            ...(tenantId && { tenantId: tenantId })
-        },
-        include: {
-            tenant: true 
-        }
-    });
-
+    let user: any = null;
     let tipoUsuario = 'FUNCIONARIO';
     let subdominioDetectado = '';
 
-    if (user && user.tenant) {
-        subdominioDetectado = user.tenant.subdomain;
+    if (tenantId) {
+        // Login feito de dentro do subdomínio de uma loja específica — restringe
+        // a busca a ELA. Isso é o que permite o mesmo e-mail existir em lojas
+        // diferentes sem ambiguidade nenhuma (cada loja é isolada das outras).
+        user = await this.prisma.funcionario.findFirst({
+            where: { email, tenantId },
+            include: { tenant: true },
+        });
+
+        if (!user) {
+            tipoUsuario = 'CLIENTE';
+            user = await this.prisma.cliente.findFirst({
+                where: { email, tenantId },
+                include: { tenant: true },
+            });
+        }
+    } else {
+        // Login pelo domínio principal, sem saber o subdomínio da própria loja.
+        // Como o mesmo e-mail pode existir em lojas diferentes, uma busca sem
+        // filtro de tenant é ambígua — só é seguro resolver sozinho quando o
+        // e-mail é único na plataforma inteira. Achando mais de uma conta,
+        // NÃO dá pra escolher uma "de graça" (antes pegava a primeira que o
+        // banco retornasse, o que podia logar a pessoa na loja errada por
+        // engano); melhor pedir pra ela entrar pelo endereço da própria loja.
+        const [funcionarios, clientes] = await Promise.all([
+            this.prisma.funcionario.findMany({ where: { email }, include: { tenant: true } }),
+            this.prisma.cliente.findMany({ where: { email }, include: { tenant: true } }),
+        ]);
+
+        if (funcionarios.length + clientes.length > 1) {
+            throw new UnauthorizedException('Encontramos mais de uma conta com este e-mail em lojas diferentes. Acesse pelo endereço da sua loja (ex: sualoja.zencut.com.br) para entrar.');
+        }
+
+        if (funcionarios.length === 1) {
+            user = funcionarios[0];
+        } else if (clientes.length === 1) {
+            user = clientes[0];
+            tipoUsuario = 'CLIENTE';
+        }
     }
 
-    // 2. Se não achou funcionário, tenta achar nos CLIENTES
-    if (!user) {
-        user = await this.prisma.cliente.findFirst({
-            where: {
-                email: email,
-                ...(tenantId && { tenantId: tenantId })
-            },
-            // 👇 ADICIONE ISSO AQUI TAMBÉM POR SEGURANÇA!
-            include: {
-                tenant: true 
-            }
-        });
-        tipoUsuario = 'CLIENTE';
-        if (user && user.tenant) {
-            subdominioDetectado = user.tenant.subdomain;
-        }
+    if (user && user.tenant) {
+        subdominioDetectado = user.tenant.subdomain;
     }
 
     // Funcionario guarda o hash em 'password'; Cliente guarda em 'senha' —
@@ -162,12 +175,6 @@ export class AuthService {
     if (!senhaCorreta) {
         throw new UnauthorizedException('Email e/ou senha incorretos.');
     }
-
-    // 👇 🔍 INSPEÇÃO DE SEGURANÇA (Olhe o terminal do seu NestJS ao logar!)
-    console.log("==========================================");
-    console.log("USUÁRIO LOGADO COMO:", tipoUsuario);
-    console.log("DADOS DO TENANT NO BACKEND:", user.tenant);
-    console.log("==========================================");
 
     const tenantIdFinal = tenantId || user.tenantId;
 
