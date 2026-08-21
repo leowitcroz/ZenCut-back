@@ -28,6 +28,18 @@ export class FinanceiroService {
         return data;
     }
 
+    // Os chamadores constroem startDate/endDate embutindo um offset -03:00
+    // fixo (horário de Brasília, sem horário de verão desde 2019) na string
+    // ISO — ex: "23:59:59 do dia 30 em -03:00" vira "02:59:59 do dia 1 em
+    // UTC". Como o servidor roda em UTC, ler .getMonth()/.getFullYear()
+    // direto nesse instante já deslocado dá o mês ERRADO (outubro em vez de
+    // setembro nesse exemplo). Descontar as 3h antes de ler os componentes
+    // devolve o "mês de competência" que a pessoa realmente pediu.
+    private mesCompetenciaBR(data: Date): { ano: number; mes: number } {
+        const comoWallClockBR = new Date(data.getTime() - 3 * 60 * 60 * 1000);
+        return { ano: comoWallClockBR.getUTCFullYear(), mes: comoWallClockBR.getUTCMonth() };
+    }
+
     // =========================================================================
     // ⚙️ MOTOR DE PROPAGAÇÃO AUTOMÁTICA DE DESPESAS FIXAS
     // =========================================================================
@@ -38,10 +50,8 @@ export class FinanceiroService {
 
         if (recorrentes.length === 0) return;
 
-        const startAno = startDate.getFullYear();
-        const startMes = startDate.getMonth();
-        const endAno = endDate.getFullYear();
-        const endMes = endDate.getMonth();
+        const { ano: startAno, mes: startMes } = this.mesCompetenciaBR(startDate);
+        const { ano: endAno, mes: endMes } = this.mesCompetenciaBR(endDate);
 
         for (let ano = startAno; ano <= endAno; ano++) {
             const mesInicial = (ano === startAno) ? startMes : 0;
@@ -49,10 +59,9 @@ export class FinanceiroService {
 
             for (let mes = mesInicial; mes <= mesFinal; mes++) {
                 for (const rec of recorrentes) {
-                    const anoCriacao = rec.createdAt.getFullYear();
-                    const mesCriacao = rec.createdAt.getMonth();
-                    const mesAnoCriacao = new Date(anoCriacao, mesCriacao, 1).getTime();
-                    const mesAnoAlvo = new Date(ano, mes, 1).getTime();
+                    const { ano: anoCriacao, mes: mesCriacao } = this.mesCompetenciaBR(rec.createdAt);
+                    const mesAnoCriacao = Date.UTC(anoCriacao, mesCriacao, 1);
+                    const mesAnoAlvo = Date.UTC(ano, mes, 1);
 
                     if (mesAnoAlvo < mesAnoCriacao) continue;
 
@@ -62,8 +71,8 @@ export class FinanceiroService {
                             description: rec.description,
                             type: ExpenseType.FIXED,
                             date: {
-                                gte: new Date(ano, mes, 1),
-                                lte: new Date(ano, mes + 1, 0)
+                                gte: new Date(Date.UTC(ano, mes, 1)),
+                                lt: new Date(Date.UTC(ano, mes + 1, 1))
                             }
                         }
                     });
